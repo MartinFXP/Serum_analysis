@@ -453,7 +453,9 @@ are fictional and not equivalent to the observed relations.</p>
 </div>
 <div id="installation" class="section level1">
 <h1>Installation</h1>
-<p>The R software can be freely acquired from <a href="https://www.r-project.org/" class="uri">https://www.r-project.org/</a>.</p>
+<p>The R software can be freely acquired from <a href="https://www.r-project.org/" class="uri">https://www.r-project.org/</a>. The installation of R and
+the packages can take several minutes due to a large number of
+dependencies. Dependencies are automatically installed.</p>
 <pre class="r"><code>install.packages(&quot;BiocManager&quot;)
 
 BiocManager::install(c(&quot;bnlearn&quot;,&quot;parallel&quot;,&quot;abind&quot;,&quot;mnem&quot;,&quot;devtools&quot;,&quot;lmtest&quot;))
@@ -827,7 +829,7 @@ sessionInfo()</code></pre>
 print(&quot;Runtime:&quot;)</code></pre>
 <pre><code>## [1] &quot;Runtime:&quot;</code></pre>
 <pre class="r"><code>print(end-start)</code></pre>
-<pre><code>## Time difference of 8.942142 secs</code></pre>
+<pre><code>## Time difference of 9.114224 secs</code></pre>
 </div>
 
 

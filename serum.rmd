@@ -18,7 +18,7 @@ This is the data analysis pipeline accompanying the article Dewald et al. 2022. 
 
 # Installation
 
-The R software can be freely acquired from https://www.r-project.org/.
+The R software can be freely acquired from https://www.r-project.org/. The installation of R and the packages can take several minutes due to a large number of dependencies. Dependencies are automatically installed.
 
 ```{r,eval=FALSE}
 install.packages("BiocManager")
