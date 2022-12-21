@@ -1,0 +1,241 @@
+---
+title: "Serum analysis"
+date: "`r Sys.Date()`"
+graphics: yes
+output:
+  html_document:
+    theme: cerulean
+    code_folding: hide
+  pdf_document: default
+  word_document: default
+header-includes: \usepackage{xcolor}
+vignette: "%\\VignetteEngine{knitr::rmarkdown} %\\VignetteEncoding{UTF-8}\n"
+---
+
+# Introduction
+
+This is the data analysis pipeline accompanying the article Dewald et al. 2022. We start by loading libraries, simulated data (with some dependencies) and setting parameters. The simulated data is based on the distributions of the observed data from the study. Variable dependencies are fictional and not equivalent to the observed relations.
+
+```{r,echo=TRUE,fig.height=6}
+library(bnlearn)
+library(RcppFun)
+library(parallel)
+cl <- makePSOCKcluster(2)
+invisible(clusterEvalQ(cl,"library(mnem); library(bnlearn)"))
+graph2adj <- mnem:::graph2adj
+clusterExport(cl,c("as.graphNEL","graph2adj","hc"))
+library(abind)
+library(mnem)
+scaled <- 1
+n <- 100
+m <- 0.5
+redo <- 0
+docpdag <- 1
+df <- readRDS("serum_data_simulated.rds")
+for (i in 1:ncol(df)) {
+  if (class(df[,i])=="character") {
+    df[,i] <- factor(df[,i])
+  }
+}
+print(str(df))
+```
+
+# Step-wise forward regression with likelihood-ratio test
+
+In each step we create a new model for each un-selected variable and compare to the currently best model by testing the significance of the model fit. The best variable is then added to the model. All others are again tested until none is significant anymore or all are included in the best model.
+
+```{r,echo=TRUE,fig.height=6}
+par(mfrow=c(1,2))
+responses <- c("SpikeLoad","ID50Wuh01","ID50BA5","ID50BQ11")
+featureVals <- as.data.frame(matrix(NA,ncol(df),length(responses)))
+rownames(featureVals) <- colnames(df)
+colnames(featureVals) <- responses
+counter <- 0
+useVarsList <- list()
+for (response in responses) {
+  counter <- counter + 1
+  dftmp <- df
+  if (response=="SpikeLoad") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BA5","ID50BQ11"))]
+  }
+  if (response=="ID50Wuh01") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50BA5","ID50BQ11"))]
+  }
+  if (response=="ID50BA5") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BQ11"))]
+  }
+  if (response=="ID50BQ11") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BA5"))]
+  }
+  useVars <- response
+  formula <- as.formula(paste0(response," ~ 1"))
+  modBest <- lm(formula, data=dftmp)
+  formula <- as.formula(paste0(response," ~ ."))
+  fitinc <- NULL
+  coltype <- NULL
+  testVars <- colnames(dftmp)[colnames(dftmp)!=response]
+  while(length(testVars)>0) {
+    pvals <- numeric(length(colnames(dftmp)[which(colnames(dftmp) %in% testVars)]))
+    for (i in testVars) {
+      mod <- lm(formula, data=dftmp[,c(useVars,i)])
+      pvals[which(i==colnames(dftmp)[which(colnames(dftmp) %in% testVars)])] <- (lmtest::lrtest(mod,modBest)[5])[2,]
+    }
+    fitinc <- c(fitinc,-log10(min(pvals)))
+    names(fitinc)[length(fitinc)] <- colnames(dftmp)[which(colnames(dftmp) %in% testVars)][which.min(pvals)]
+    if (min(pvals)<0.05) {
+      useVars <- c(useVars,colnames(dftmp)[which(colnames(dftmp) %in% testVars)][which.min(pvals)])
+      coltype <- c(coltype,1)
+    } else {
+      coltype <- c(coltype,2)
+    }
+    testVars <- testVars[which(!testVars %in% names(fitinc))]
+    modBest <- lm(formula, data=dftmp[,useVars])
+  }
+  useVarsList[[response]] <- useVars
+  par(mar=c(3,8,2,2))
+  cols <- rep(rgb(1,0,0),sum(coltype==1))
+  cols <- c(cols,rep(rgb(0.9,0.9,0.9),sum(coltype==2)))
+  barplot(rev(fitinc),horiz=TRUE,las=1,col=rev(cols),
+          xlab="-log10(p-value)",
+          main=paste0(response,"\nadding most significant (<0.05) variable"))
+  abline(v=-log10(0.05))
+  featureVals[match(names(fitinc),rownames(featureVals)),counter] <- fitinc
+}
+```
+
+# Show final models
+
+In the final models we can scale the variable to make the coefficients comparable.
+
+```{r,echo=TRUE}
+models <- list()
+count <- 1
+counter <- 0
+for (response in c("SpikeLoad","ID50Wuh01","ID50BA5","ID50BQ11")) {
+  counter <- counter + 1
+  formula <- as.formula(paste0(response," ~ ."))
+  useVars <- useVarsList[[response]]
+  dftmp <- df[,useVars]
+  if (scaled) {
+    dftmp[,unlist(lapply(dftmp,class))!="factor"] <- scale(dftmp[,unlist(lapply(dftmp,class))!="factor"])
+  }
+  mod <- lm(formula, data=dftmp)
+  print(paste0(responses,c("","","","~Wuh01","","~Wuh01+BA5"))[counter])
+  print(summary(mod))
+  models[[counter]] <- mod
+}
+```
+
+# Bayesian network analysis
+
+We run n bootstraps and summarize them by counting the edges. The final network is plotted with a cut off for edge fraction by m.
+
+```{r,echo=TRUE,fig.width=12,fig.height=4}
+adj2dnf <- function(A) {
+    dnf <- NULL
+    for (i in seq_len(ncol(A))) {
+        dnf <- c(dnf, rownames(A))
+        for (j in seq_len(nrow(A))) {
+            if (A[i, j] > 0) {
+                dnf <- c(dnf, paste(colnames(A)[i], rownames(A)[j], sep = "="))
+            }
+            if (A[i, j] < 0) {
+                dnf <- c(dnf, paste("!", colnames(A)[i], "=", rownames(A)[j],
+                                    sep = ""))
+            }
+        }
+    }
+    dnf <- unique(dnf)
+    return(dnf)
+}
+counter <- 0
+for (response in c("SpikeLoad","ID50Wuh01","ID50BA5","ID50BQ11")) {
+  counter <- counter + 1
+  dftmp <- df
+  if (response=="SpikeLoad") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BA5","ID50BQ11"))]
+  }
+  if (response=="ID50Wuh01") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50BA5","ID50BQ11"))]
+  }
+  if (response=="ID50BA5") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BQ11"))]
+  }
+  if (response=="ID50BQ11") {
+    dftmp <- df[,which(!colnames(df) %in% c("ID50Wuh01","ID50BA5"))]
+  }
+  useVars <- c(response,useVarsList[[response]])
+  bl <- NULL
+  for (i in 1:ncol(dftmp)) {
+    bl <- rbind(bl,c(response,colnames(dftmp)[i]))
+  }
+  colnames(bl) <- c("from","to")
+  bl <- as.data.frame(bl)
+  bn <- hc(dftmp,blacklist=bl,restart=100,max.iter=1)
+  bnorg <- mnem:::graph2adj(as.graphNEL(bn))
+  bnbs <- bnorg*0
+  doBs <- function(i,bnbs,df,bl) {
+    bnbs <- hc(df[sample(1:nrow(df),nrow(df),replace=TRUE),],blacklist=bl,
+               restart=100,max.iter=1000)
+    return(bnbs)
+  }
+  filename <- paste0(responses[counter],"_cpdag_",docpdag,".rds")
+  if (file.exists(filename) & redo==0) {
+    bnbs <- readRDS(filename)
+  } else {
+    bnbs <- clusterApply(cl,1:n,doBs,bnbs,dftmp,bl)
+    saveRDS(bnbs,filename)
+  }
+  bnbs <- lapply(bnbs,function(x,docpdag=0) {
+    if (docpdag) x <- cpdag(x) # here cpdag
+    y <- graph2adj(as.graphNEL(x))
+  },docpdag=docpdag)
+  bnbs <- do.call("abind",list(bnbs,along=3))
+  bnbs <- apply(bnbs,c(1,2),sum)/n
+  bnorg <- bnorg*bnbs
+  nodecol <- list()
+  for (i in 1:nrow(bnorg)) {
+    nodecol[[rownames(bnorg)[i]]] <- rgb(0.7,0.7,0.7)
+    if (rownames(bnorg)[i] %in% useVars) nodecol[[rownames(bnorg)[i]]] <- rgb(1,0,0)
+  }
+  nodecol[[response]] <- rgb(1,1,1)
+  edgelabels <- character(length(bnbs))
+  for (i in 1:length(bnbs)) {
+    tmp <- binom.test(round(t(bnbs)[i]*n),n)
+    edgelabels[i] <- paste0(round(t(bnbs)[i]*n),"\n",
+                            "[",round(tmp$conf.int[1],3),";",round(tmp$conf.int[2],3),"]")
+  }
+  bnbscut <- bnbs
+  bnbscut[bnbs<m] <- 0
+  bnbscutdnf <- adj2dnf(bnbscut)
+  plotDnf(adj2dnf(bnbscut),nodeshape="box",width=5,nodecol=nodecol,
+          main="boostrapped data cut off by 0.5 with support and CI",
+          edgelabel=c(rep("",length(bnbscutdnf)-length(grep("=",bnbscutdnf))),
+                      edgelabels[which(as.vector(t(bnbscut))!=0)]),showall=FALSE)
+  cat(".")
+}
+```
+
+```{r,echo=TRUE}
+stopCluster(cl)
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
