@@ -16,7 +16,20 @@ vignette: "%\\VignetteEngine{knitr::rmarkdown} %\\VignetteEncoding{UTF-8}\n"
 
 This is the data analysis pipeline accompanying the article Dewald et al. 2022. We start by loading libraries, simulated data (with some dependencies) and setting parameters. The simulated data is based on the distributions of the observed data from the study. Variable dependencies are fictional and not equivalent to the observed relations.
 
+# Installation
+
+The R software can be freely acquired from https://www.r-project.org/.
+
+```{r,eval=FALSE}
+install.packages("BiocManager")
+
+BiocManager::install(c("bnlearn","parallel","abind","mnem","devtools","lmtest"))
+
+devtools::install_github("MartinFXP/RcppFun")
+```
+
 ```{r,echo=TRUE,fig.height=6}
+start <- Sys.time()
 library(bnlearn)
 library(RcppFun)
 library(parallel)
@@ -219,6 +232,9 @@ for (response in c("SpikeLoad","ID50Wuh01","ID50BA5","ID50BQ11")) {
 ```{r,echo=TRUE}
 stopCluster(cl)
 sessionInfo()
+end <- Sys.time()
+print("Runtime:")
+print(end-start)
 ```
 
 
